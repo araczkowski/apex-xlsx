@@ -2274,6 +2274,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
     l_excel      BLOB;
     l_sheet_id   PLS_INTEGER;
     l_filename   VARCHAR2(32767);
+    l_order_by   VARCHAR2(32767);
     l_row        NUMBER;
     l_column     NUMBER;
 
@@ -2692,10 +2693,36 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
       END IF;
       --
       as_xlsx.new_sheet(l_sheet_name);
+      --
+      -- get the sorting
+      -- FSP<app>P<page>R<region?>SORT
+      l_order_by := htmldb_util.get_preference('FSP' || t_app_id || '_P' ||
+                                               t_page_id || '_R' ||
+                                               r_apr.region_id || '_SORT'
+                                              ,v('APP_USER'));
+      l_order_by := REPLACE(l_order_by
+                           ,'fsp_sort_'
+                           ,'');
+      l_order_by := REPLACE(l_order_by
+                           ,'_'
+                           ,' ');
+      IF length(l_order_by) > 0
+      THEN
+        IF instr(l_order_by
+                ,'desc') > 0
+        THEN
+          l_order_by := REPLACE(l_order_by
+                               ,'desc'
+                               ,'asc');
+        ELSE
+          l_order_by := l_order_by || ' desc';
+        END IF;
+        l_order_by := ' order by ' || l_order_by;
+      END IF;
 
       --
       BEGIN
-        t_val := apex_plugin_util.get_data2(r_apr.region_source
+        t_val := apex_plugin_util.get_data2(r_apr.region_source || l_order_by
                                            ,1
                                            ,c_max_columns
                                            ,p_component_name => p_process.name);
