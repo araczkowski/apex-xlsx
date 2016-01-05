@@ -37,7 +37,10 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
     ,column PLS_INTEGER
     ,width  PLS_INTEGER
     ,height PLS_INTEGER);
+  TYPE tp_row_break IS RECORD(
+     ROW PLS_INTEGER);
   TYPE tp_comments IS TABLE OF tp_comment INDEX BY PLS_INTEGER;
+  TYPE tp_row_breaks IS TABLE OF tp_row_break INDEX BY PLS_INTEGER;
   TYPE tp_mergecells IS TABLE OF VARCHAR2(21) INDEX BY PLS_INTEGER;
   TYPE tp_validation IS RECORD(
      TYPE             VARCHAR2(10)
@@ -64,6 +67,7 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
     ,col_fmts    tp_col_fmts
     ,row_fmts    tp_row_fmts
     ,comments    tp_comments
+    ,row_breaks  tp_row_breaks
     ,mergecells  tp_mergecells
     ,validations tp_validations);
   TYPE tp_sheets IS TABLE OF tp_sheet INDEX BY PLS_INTEGER;
@@ -368,6 +372,7 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
       workbook.sheets(s).col_fmts.delete();
       workbook.sheets(s).row_fmts.delete();
       workbook.sheets(s).comments.delete();
+      workbook.sheets(s).row_breaks.delete();
       workbook.sheets(s).mergecells.delete();
       workbook.sheets(s).validations.delete();
     END LOOP;
@@ -879,6 +884,17 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
     workbook.sheets(t_sheet).comments(t_ind).height := p_height;
   END;
   --
+  PROCEDURE ROW_BREAK(p_row   PLS_INTEGER
+                     ,p_sheet PLS_INTEGER := NULL) IS
+    t_ind   PLS_INTEGER;
+    t_sheet PLS_INTEGER := NVL(p_sheet
+                              ,workbook.sheets.count());
+  BEGIN
+    t_ind := workbook.sheets(t_sheet).row_breaks.count() + 1;
+    workbook.sheets(t_sheet).row_breaks(t_ind).row := p_row;
+  END;
+
+  --
   PROCEDURE mergecells(p_tl_col PLS_INTEGER -- top left
                       ,p_tl_row PLS_INTEGER
                       ,p_br_col PLS_INTEGER -- bottom right
@@ -1132,7 +1148,8 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
     dbms_lob.freetemporary(t_tmp);
   END;
   --
-  FUNCTION finish(p_landscape BOOLEAN DEFAULT FALSE) RETURN BLOB IS
+  FUNCTION finish(p_landscape    BOOLEAN DEFAULT FALSE
+                 ,p_page_margins VARCHAR2 DEFAULT 'NORMAL') RETURN BLOB IS
     t_excel   BLOB;
     t_xxx     CLOB;
     t_tmp     VARCHAR2(32767 CHAR);
@@ -1148,6 +1165,7 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
     t_col_ind PLS_INTEGER;
     t_len     PLS_INTEGER;
     ts        TIMESTAMP := systimestamp;
+    l_rbc     NUMBER;
   BEGIN
     dbms_lob.createtemporary(t_excel
                             ,TRUE);
@@ -1883,8 +1901,16 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
         END LOOP;
         t_xxx := t_xxx || '</hyperlinks>';
       END IF;
-      t_xxx := t_xxx ||
-               '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>';
+    
+      -- margins
+      IF p_page_margins = 'NARROW'
+      THEN
+        t_xxx := t_xxx ||
+                 '<pageMargins left="0.25" right="0.25" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>';
+      ELSE
+        t_xxx := t_xxx ||
+                 '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>';
+      END IF;
       -- portrait / landscape
       IF p_landscape
       THEN
@@ -1892,6 +1918,20 @@ CREATE OR REPLACE PACKAGE BODY as_xlsx IS
                  '<pageSetup paperSize="9" orientation="landscape"/>';
       ELSE
         t_xxx := t_xxx || '<pageSetup paperSize="9" orientation="portrait"/>';
+      END IF;
+      -- rowBreaks
+      
+     l_rbc := workbook.sheets(s).row_breaks.count();
+      IF l_rbc > 0
+      THEN
+        t_xxx := t_xxx || '<rowBreaks count="'|| to_char(l_rbc) ||
+                 '" manualBreakCount="'|| to_char(l_rbc) ||'">';
+       FOR rb IN 1 .. l_rbc
+        LOOP
+          t_xxx := t_xxx ||'<brk id="'||to_char(workbook.sheets(s).row_breaks(rb).row)||'" man="1"/>';
+          -- <brk id="7" max="16383" man="1"/><brk id="10" max="16383" man="1"/></rowBreaks>
+        END LOOP;
+        t_xxx := t_xxx || '</rowBreaks>';
       END IF;
       --
       IF workbook.sheets(s).comments.count() > 0
@@ -2277,7 +2317,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
     l_order_by   VARCHAR2(32767);
     l_row        NUMBER;
     l_column     NUMBER;
-
+  
     t_val apex_plugin_util.t_column_value_list2;
     TYPE tp_col IS RECORD(
        label apex_application_page_ir_col.report_label%TYPE
@@ -2302,7 +2342,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
     t_session_id          := v('APP_SESSION');
     --
     as_xlsx.clear_workbook;
-
+  
     --
     apex_debug_message.log_message('looking for report regions');
     l_sheet_id := 1;
@@ -2347,7 +2387,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
                    ORDER BY apr.display_sequence)
     LOOP
       --
-
+    
       --
       apex_debug_message.log_message('found ' || r_apr.source_type_code || ' ' ||
                                      r_apr.region_name);
@@ -2389,7 +2429,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
                                       ,1
                                       ,instr(t_pref
                                             ,'_') - 1);
-            --
+            --        
             SELECT *
               INTO t_apr
               FROM apex_application_page_ir_rpt apr
@@ -2679,7 +2719,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
       THEN
         l_filename := r_apr.region_name;
       END IF;
-
+    
       --
       -- New sheet
       --
@@ -2694,7 +2734,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
       --
       as_xlsx.new_sheet(l_sheet_name);
       --
-      -- get the sorting
+      -- get the sorting 
       -- FSP<app>P<page>R<region?>SORT
       l_order_by := htmldb_util.get_preference('FSP' || t_app_id || '_P' ||
                                                t_page_id || '_R' ||
@@ -2719,7 +2759,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
         END IF;
         l_order_by := ' order by ' || l_order_by;
       END IF;
-
+    
       --
       BEGIN
         t_val := apex_plugin_util.get_data2(r_apr.region_source || l_order_by
@@ -2733,7 +2773,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
           RAISE;
       END;
       --
-
+    
       --
       FOR c IN 1 .. t_cols.count()
       LOOP
@@ -2754,7 +2794,7 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
       END LOOP;
       --
       -- HEADER
-
+    
       IF p_headers
       THEN
         l_column := 0;
@@ -2791,16 +2831,16 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
                                                               ,p_bottom => 'thin'
                                                               ,p_left   => 'thin'
                                                               ,p_right  => 'thin'));
-
+              
                 as_xlsx.set_column_width(p_col   => l_column
                                         ,p_width => 24);
-
+              
               END IF;
             END IF;
           END IF;
         END LOOP;
       END IF;
-
+    
       --
       -- DATA
       --
@@ -2932,4 +2972,3 @@ style="position:absolute;margin-left:35.25pt;margin-top:3pt;z-index:' ||
   END;
 
 END;
- 
